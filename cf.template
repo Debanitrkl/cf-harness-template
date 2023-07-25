@@ -1,0 +1,157 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation Template for Amazon EKS
+
+Parameters:
+  ClusterName:
+    Type: String
+    Description: Name of the EKS cluster
+  VpcCIDR:
+    Type: String
+    Default: 10.0.0.0/16
+    Description: CIDR block for the VPC
+  SubnetACIDR:
+    Type: String
+    Default: 10.0.1.0/24
+    Description: CIDR block for Subnet A
+  SubnetBCIDR:
+    Type: String
+    Default: 10.0.2.0/24
+    Description: CIDR block for Subnet B
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${ClusterName}-VPC
+
+  SubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref SubnetACIDR
+      AvailabilityZone: !Select [0, !GetAZs !Ref 'AWS::Region']
+      Tags:
+        - Key: Name
+          Value: !Sub ${ClusterName}-SubnetA
+
+  SubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref SubnetBCIDR
+      AvailabilityZone: !Select [1, !GetAZs !Ref 'AWS::Region']
+      Tags:
+        - Key: Name
+          Value: !Sub ${ClusterName}-SubnetB
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${ClusterName}-RouteTable
+
+  SubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref RouteTable
+      SubnetId: !Ref SubnetA
+
+  SubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref RouteTable
+      SubnetId: !Ref SubnetB
+
+  InternetRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  ClusterSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for the EKS cluster
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${ClusterName}-Cluster-SG
+
+  EKSClusterRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ClusterName}-EKSClusterRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: eks.amazonaws.com
+            Action: sts:AssumeRole
+
+  EKSClusterPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub ${ClusterName}-EKSClusterPolicy
+      Roles:
+        - !Ref EKSClusterRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - 'eks:DescribeCluster'
+            Resource: !Sub 'arn:aws:eks:${AWS::Region}:${AWS::AccountId}:cluster/${ClusterName}'
+
+  EKSControlPlaneSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for the EKS control plane
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${ClusterName}-ControlPlane-SG
+
+  EKSControlPlane:
+    Type: AWS::EKS::Cluster
+    Properties:
+      Name: !Ref ClusterName
+      RoleArn: !GetAtt EKSClusterRole.Arn
+      ResourcesVpcConfig:
+        SecurityGroupIds:
+          - !Ref ClusterSecurityGroup
+          - !Ref EKSControlPlaneSecurityGroup
+        SubnetIds:
+          - !Ref SubnetA
+          - !Ref SubnetB
+
+Outputs:
+  ClusterNameOutput:
+    Description: EKS Cluster Name
+    Value: !Ref ClusterName
+
+  ClusterARNOutput:
+    Description: EKS Cluster ARN
+    Value: !GetAtt EKSControlPlane.Arn
+
+  ControlPlaneSecurityGroupOutput:
+    Description: Security Group ID for the EKS control plane
+    Value: !Ref EKSControlPlaneSecurityGroup
